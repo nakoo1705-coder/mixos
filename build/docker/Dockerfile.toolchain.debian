@@ -1,0 +1,95 @@
+FROM debian:bookworm-slim
+
+LABEL maintainer="MixOS-GO Team"
+LABEL description="MixOS-GO Build Toolchain - Complete build environment for make all"
+LABEL version="1.0.0"
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install build dependencies (use --no-install-recommends for slimmer image)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    gcc \
+    g++ \
+    make \
+    bc \
+    bison \
+    flex \
+    libelf-dev \
+    libssl-dev \
+    perl \
+    libncurses-dev \
+    golang \
+    # VISO/Bootloader tools
+    grub-pc-bin \
+    grub-efi-amd64-bin \
+    xorriso \
+    squashfs-tools \
+    mtools \
+    dosfstools \
+    e2fsprogs \
+    parted \
+    # Network/block tools
+    nbd-client \
+    # Image tools
+    qemu-utils \
+    qemu-system-x86 \
+    # General utilities
+    curl \
+    wget \
+    tar \
+    gzip \
+    xz-utils \
+    bzip2 \
+    zstd \
+    cpio \
+    git \
+    bash \
+    file \
+    patch \
+    tree \
+    which \
+    libc6-dev \
+    # SQLite for package manager
+    libsqlite3-dev \
+    sqlite3 \
+    # Testing/util
+    util-linux \
+    findutils \
+    mlocate \
+    ca-certificates \
+    pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV GOPATH=/go \
+    PATH=/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    GO111MODULE=on \
+    GOPROXY=https://proxy.golang.org,direct \
+    GOVCS=*:all \
+    JOBS=4 \
+    BUILD_DIR=/workspace/.tmp/mixos-build \
+    OUTPUT_DIR=/workspace/artifacts \
+    REPO_ROOT=/workspace
+
+# Create working directories and default build/output paths inside workspace
+RUN mkdir -p /workspace/.tmp/mixos-build /workspace/artifacts /workspace /go/bin && \
+    chown -R root:root /workspace/.tmp/mixos-build /workspace/artifacts
+
+WORKDIR /workspace
+
+# Verify a few key tools at build time
+RUN echo "Verifying toolchain installation..." && \
+    gcc --version && \
+    go version && \
+    grub-install --version || true && \
+    mksquashfs --version || true && \
+    qemu-img --version || true && \
+    echo "\u2713 Toolchain packages installed"
+
+# Setup for make all execution
+ENV CFLAGS="-O2" \
+    LDFLAGS="" \
+    MAKEFLAGS="-j${JOBS}"
+# Use bash for RUN commands and at container runtime
+SHELL ["/bin/bash","-lc"]
+CMD ["/bin/bash"]

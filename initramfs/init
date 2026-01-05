@@ -383,9 +383,15 @@ check_vram_capability() {
     fi
 }
 
+# Global variable to store VRAM path (avoids mixing echo output with return value)
+VRAM_RESULT_PATH=""
+
 activate_vram() {
     local source_path=$1
     local vram_mount="/mnt/vram"
+    
+    # Reset result
+    VRAM_RESULT_PATH=""
     
     echo ""
     echo "╔══════════════════════════════════════════╗"
@@ -449,8 +455,8 @@ activate_vram() {
     echo "╚══════════════════════════════════════════╝"
     echo ""
     
-    # Return the VRAM mount path
-    echo "$vram_mount"
+    # Set result in global variable (NOT echo - to avoid mixing with log output)
+    VRAM_RESULT_PATH="$vram_mount"
     return 0
 }
 
@@ -506,12 +512,14 @@ setup_rootfs_sdisk() {
     # Check VRAM capability
     if [ "$VRAM_ENABLED" = "auto" ] || [ "$VRAM_ENABLED" = "1" ] || [ "$VRAM_ENABLED" = "yes" ]; then
         if check_vram_capability "$rootfs_squashfs"; then
-            local vram_path
-            vram_path=$(activate_vram "$rootfs_squashfs")
-            if [ $? -eq 0 ] && [ -n "$vram_path" ]; then
-                echo "$vram_path"
-                return 0
+            # activate_vram sets VRAM_RESULT_PATH on success
+            if activate_vram "$rootfs_squashfs"; then
+                if [ -n "$VRAM_RESULT_PATH" ] && [ -d "$VRAM_RESULT_PATH" ]; then
+                    echo "$VRAM_RESULT_PATH"
+                    return 0
+                fi
             fi
+            log_warn "VRAM activation failed, falling back to normal mode"
         fi
     fi
     

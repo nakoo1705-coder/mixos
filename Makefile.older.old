@@ -50,7 +50,7 @@ all: toolchain-check kernel mix-cli installer packages rootfs initramfs iso viso
 .PHONY: all-logged
 all-logged:
 	@LOGDIR=.build-logs; mkdir -p $$LOGDIR; \
-	for t in viso; do \
+	for t in toolchain-check kernel mix-cli installer packages rootfs initramfs iso viso; do \
 		echo "===== BUILD: $$t ====="; \
 		if $(MAKE) $$t 2>&1 | tee $$LOGDIR/$$t.log; then \
 			echo "[OK] $$t"; \
@@ -228,7 +228,7 @@ installer: toolchain-check
 #=============================================================================
 
 # rootfs depends on kernel (for modules), installer, mix-cli, and packages
-rootfs:
+rootfs: kernel installer mix-cli packages
 	@echo -e "$(YELLOW)Building root filesystem...$(NC)"
 	@bash build/scripts/build-rootfs.sh
 	@echo -e "$(GREEN)✓ Rootfs created$(NC)"
@@ -237,7 +237,7 @@ rootfs:
 # ISO Image (Traditional)
 #=============================================================================
 
-iso:
+iso: kernel rootfs initramfs
 	@echo -e "$(YELLOW)Building ISO image...$(NC)"
 	@bash build/scripts/build-iso.sh
 	@echo -e "$(GREEN)✓ ISO generated$(NC)"
@@ -259,24 +259,24 @@ iso-autoinstall: toolchain-check
 
 # initramfs depends on kernel (for modules) AND rootfs (for module installation)
 # This ensures modules are properly installed before initramfs is built
-initramfs:
+initramfs: kernel rootfs modules-dep
 	@echo -e "$(CYAN)Building enhanced initramfs with VISO/VRAM support...$(NC)"
 	@mkdir -p $(OUTPUT_DIR)/boot
 	@bash build/scripts/build-initramfs.sh
 	@echo -e "$(GREEN)✓ Initramfs built$(NC)"
 
-viso:
+viso: kernel rootfs initramfs
 	@echo -e "$(CYAN)Building VISO (Virtual ISO) image...$(NC)"
 	@bash build/scripts/build-viso.sh
 	@echo -e "$(GREEN)✓ VISO generated: $(VISO_NAME).viso$(NC)"
 
-sdisk:
+sdisk: viso
 	@echo -e "$(CYAN)Creating SDISK (Selection Disk)...$(NC)"
 	@echo "SDISK is an alias for VISO with SDISK boot parameter"
 	@echo "Use: SDISK=$(VISO_NAME).VISO"
 	@echo -e "$(GREEN)✓ SDISK ready$(NC)"
 
-vram:
+vram: rootfs
 	@echo -e "$(CYAN)Building VRAM-optimized package...$(NC)"
 	@mkdir -p $(OUTPUT_DIR)
 	@if [ -f $(BUILD_DIR)/rootfs.squashfs ]; then \

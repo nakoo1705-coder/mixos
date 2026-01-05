@@ -209,17 +209,48 @@ ESSENTIAL_MODULES="
 
 # If modules tarball exists but rootfs modules don't, extract to a temp location
 MODULES_FOUND=0
-if [ ! -d "$MODULES_SRC" ] && [ -f "$MODULES_TARBALL" ]; then
-    log_info "Extracting modules from $MODULES_TARBALL..."
-    TEMP_MODULES="$BUILD_DIR/temp-modules"
-    rm -rf "$TEMP_MODULES"
-    mkdir -p "$TEMP_MODULES"
-    tar -xzf "$MODULES_TARBALL" -C "$TEMP_MODULES"
-    # Find the actual modules directory (it's under lib/modules/VERSION)
-    EXTRACTED_MODULES=$(find "$TEMP_MODULES" -type d -name "6.6.*" | head -1)
-    if [ -n "$EXTRACTED_MODULES" ] && [ -d "$EXTRACTED_MODULES" ]; then
-        MODULES_SRC="$EXTRACTED_MODULES"
-        log_ok "Modules extracted to $MODULES_SRC"
+
+# Try multiple sources for modules
+if [ ! -d "$MODULES_SRC" ] || [ -z "$(ls -A "$MODULES_SRC" 2>/dev/null)" ]; then
+    log_info "Modules not found in rootfs, checking alternatives..."
+    
+    # Try 1: Extract from modules tarball
+    if [ -f "$MODULES_TARBALL" ]; then
+        log_info "Extracting modules from $MODULES_TARBALL..."
+        TEMP_MODULES="$BUILD_DIR/temp-modules"
+        rm -rf "$TEMP_MODULES"
+        mkdir -p "$TEMP_MODULES"
+        tar -xzf "$MODULES_TARBALL" -C "$TEMP_MODULES"
+        
+        # Find the actual modules directory - try exact version first, then pattern
+        EXTRACTED_MODULES=""
+        if [ -d "$TEMP_MODULES/lib/modules/$KERNEL_VERSION" ]; then
+            EXTRACTED_MODULES="$TEMP_MODULES/lib/modules/$KERNEL_VERSION"
+        else
+            # Try to find any modules directory
+            EXTRACTED_MODULES=$(find "$TEMP_MODULES" -type d -name "$KERNEL_VERSION" 2>/dev/null | head -1)
+            if [ -z "$EXTRACTED_MODULES" ]; then
+                # Fallback: find any kernel version directory
+                EXTRACTED_MODULES=$(find "$TEMP_MODULES" -type d -path "*/lib/modules/*" -name "[0-9]*" 2>/dev/null | head -1)
+            fi
+        fi
+        
+        if [ -n "$EXTRACTED_MODULES" ] && [ -d "$EXTRACTED_MODULES" ]; then
+            MODULES_SRC="$EXTRACTED_MODULES"
+            log_ok "Modules extracted to $MODULES_SRC"
+        fi
+    fi
+    
+    # Try 2: Check if kernel build left modules somewhere
+    if [ ! -d "$MODULES_SRC" ] || [ -z "$(ls -A "$MODULES_SRC" 2>/dev/null)" ]; then
+        KERNEL_BUILD_MODULES="$BUILD_DIR/linux-*/modules_install/lib/modules/$KERNEL_VERSION"
+        for kmod in $KERNEL_BUILD_MODULES; do
+            if [ -d "$kmod" ]; then
+                MODULES_SRC="$kmod"
+                log_ok "Found modules in kernel build: $MODULES_SRC"
+                break
+            fi
+        done
     fi
 fi
 
