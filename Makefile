@@ -34,8 +34,11 @@ NC := \033[0m
 # Main targets
 #=============================================================================
 
-# all: toolchain-check kernel mix-cli installer packages rootfs iso
-all: toolchain-check kernel mix-cli installer packages rootfs initramfs iso viso
+# Build everything - viso depends on all other targets via dependency chain:
+# viso -> rootfs -> kernel, mix-cli, installer, packages
+# viso -> initramfs -> rootfs
+# iso -> rootfs, initramfs
+all: toolchain-check iso viso
 	@echo -e "$(GREEN)✓ MixOS-GO v$(VERSION) build complete!$(NC)"
 	@echo ""
 	@echo "Build artifacts:"
@@ -228,7 +231,8 @@ installer: toolchain-check
 #=============================================================================
 
 # rootfs depends on kernel (for modules), installer, mix-cli, and packages
-rootfs:
+# All artifacts must be built BEFORE rootfs can integrate them
+rootfs: kernel mix-cli installer packages
 	@echo -e "$(YELLOW)Building root filesystem...$(NC)"
 	@bash build/scripts/build-rootfs.sh
 	@echo -e "$(GREEN)✓ Rootfs created$(NC)"
@@ -237,7 +241,8 @@ rootfs:
 # ISO Image (Traditional)
 #=============================================================================
 
-iso:
+# iso depends on rootfs (which includes all artifacts), kernel, and initramfs
+iso: rootfs initramfs
 	@echo -e "$(YELLOW)Building ISO image...$(NC)"
 	@bash build/scripts/build-iso.sh
 	@echo -e "$(GREEN)✓ ISO generated$(NC)"
@@ -257,15 +262,16 @@ iso-autoinstall: toolchain-check
 # VISO/SDISK/VRAM (Revolutionary Features)
 #=============================================================================
 
-# initramfs depends on kernel (for modules) AND rootfs (for module installation)
+# initramfs depends on rootfs (which has modules extracted from kernel build)
 # This ensures modules are properly installed before initramfs is built
-initramfs:
+initramfs: rootfs
 	@echo -e "$(CYAN)Building enhanced initramfs with VISO/VRAM support...$(NC)"
 	@mkdir -p $(OUTPUT_DIR)/boot
 	@bash build/scripts/build-initramfs.sh
 	@echo -e "$(GREEN)✓ Initramfs built$(NC)"
 
-viso:
+# viso depends on rootfs (squashfs), kernel (vmlinuz), and initramfs
+viso: rootfs initramfs
 	@echo -e "$(CYAN)Building VISO (Virtual ISO) image...$(NC)"
 	@bash build/scripts/build-viso.sh
 	@echo -e "$(GREEN)✓ VISO generated: $(VISO_NAME).viso$(NC)"
