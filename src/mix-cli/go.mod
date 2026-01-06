@@ -1,6 +1,8 @@
 module github.com/mixos-go/src/mix-cli
 
-go 1.21
+go 1.24.0
+
+toolchain go1.24.11
 
 require (
 	github.com/charmbracelet/bubbles v0.19.0

@@ -52,16 +52,30 @@ all: toolchain-check iso viso
 # Logged build: run subtargets one-by-one, capture logs per-target, continue on errors
 .PHONY: all-logged
 all-logged:
-	@LOGDIR=.build-logs; mkdir -p $$LOGDIR; \
-	for t in viso; do \
-		echo "===== BUILD: $$t ====="; \
-		if $(MAKE) $$t 2>&1 | tee $$LOGDIR/$$t.log; then \
-			echo "[OK] $$t"; \
-		else \
-			echo "[FAILED - IGNORED] $$t"; \
-		fi; \
-	done; \
-	echo "Logs stored in $$LOGDIR"
+	@# If top-level make wasn't started with -j, re-launch this target with -j to enable jobserver
+	@if ! echo "$$MAKEFLAGS" | grep -q -- -j && [ -z "$$RECURSIVE_ALL_LOGGED" ]; then \
+		echo "Re-launching all-logged with -j$(JOBS) to enable jobserver..."; \
+		RECURSIVE_ALL_LOGGED=1 $(MAKE) -j$(JOBS) RECURSIVE_ALL_LOGGED=1 all-logged; \
+		exit 0; \
+	fi
+	@LOGDIR=.build-logs; mkdir -p $$LOGDIR
+	@echo "===== BUILD: kernel ====="; \
+	./build/scripts/run-submake.sh kernel $$LOGDIR/kernel.log; \
+	@echo "===== BUILD: rootfs ====="; \
+	./build/scripts/run-submake.sh rootfs $$LOGDIR/rootfs.log; \
+	@echo "===== BUILD: initramfs ====="; \
+	./build/scripts/run-submake.sh initramfs $$LOGDIR/initramfs.log; \
+	@echo "===== BUILD: mix-cli ====="; \
+	./build/scripts/run-submake.sh mix-cli $$LOGDIR/mix-cli.log; \
+	@echo "===== BUILD: packages ====="; \
+	./build/scripts/run-submake.sh packages $$LOGDIR/packages.log; \
+	@echo "===== BUILD: modules-dep ====="; \
+	./build/scripts/run-submake.sh modules-dep $$LOGDIR/modules-dep.log; \
+	@echo "===== BUILD: iso ====="; \
+	./build/scripts/run-submake.sh iso $$LOGDIR/iso.log; \
+	@echo "===== BUILD: viso ====="; \
+	./build/scripts/run-submake.sh viso $$LOGDIR/viso.log; \
+	@echo "Logs stored in $$LOGDIR"
 
 
 .PHONY: logs-summary
@@ -271,18 +285,18 @@ initramfs: rootfs
 	@echo -e "$(GREEN)✓ Initramfs built$(NC)"
 
 # viso depends on rootfs (squashfs), kernel (vmlinuz), and initramfs
-viso: rootfs initramfs
+viso: rootfs initramfs sdisk vram
 	@echo -e "$(CYAN)Building VISO (Virtual ISO) image...$(NC)"
 	@bash build/scripts/build-viso.sh
 	@echo -e "$(GREEN)✓ VISO generated: $(VISO_NAME).viso$(NC)"
 
-sdisk:
+sdisk: viso
 	@echo -e "$(CYAN)Creating SDISK (Selection Disk)...$(NC)"
 	@echo "SDISK is an alias for VISO with SDISK boot parameter"
 	@echo "Use: SDISK=$(VISO_NAME).VISO"
 	@echo -e "$(GREEN)✓ SDISK ready$(NC)"
 
-vram:
+vram: rootfs
 	@echo -e "$(CYAN)Building VRAM-optimized package...$(NC)"
 	@mkdir -p $(OUTPUT_DIR)
 	@if [ -f $(BUILD_DIR)/rootfs.squashfs ]; then \
@@ -322,14 +336,14 @@ test-qemu:
 			-initrd $(OUTPUT_DIR)/boot/initramfs-mixos.img \
 			-cdrom $(OUTPUT_DIR)/mixos-go-v$(VERSION).iso \
 			-m 512 \
-			-append "console=ttyS0 SDISK=$(VISO_NAME).VISO" \
+			-append "console=ttyS0 SDISK=$(VISO_NAME).viso" \
 			-enable-kvm 2>/dev/null || \
 		qemu-system-x86_64 \
 			-kernel $$KERNEL \
 			-initrd $(OUTPUT_DIR)/boot/initramfs-mixos.img \
 			-cdrom $(OUTPUT_DIR)/mixos-go-v$(VERSION).iso \
 			-m 512 \
-			-append "console=ttyS0 SDISK=$(VISO_NAME).VISO" \
+			-append "console=ttyS0 SDISK=$(VISO_NAME).viso" \
 			-nographic; \
 	else \
 		echo -e "$(RED)Required artifacts not found. Run 'make iso' first.$(NC)"; \
