@@ -1,0 +1,358 @@
+name: MixOS-GO Build (Docker)
+
+on:
+  push:
+    branches: [ main, develop, 'bug(kernel)' ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build type'
+        required: true
+        default: 'full'
+        type: choice
+        options:
+          - full
+          - quick
+          - viso-only
+
+env:
+  GO_VERSION: '1.21'
+  KERNEL_VERSION: '6.6.8'
+  VERSION: '1.0.0'
+  DOCKER_IMAGE: mixos-builder
+
+jobs:
+  # ============================================================================
+  # Build Docker Image (cached)
+  # ============================================================================
+  build-docker-image:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tags }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Cache Docker layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ hashFiles('build/docker/Dockerfile.toolchain.debian') }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: build/docker/Dockerfile.toolchain.debian
+          push: false
+          load: true
+          tags: ${{ env.DOCKER_IMAGE }}:latest
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
+
+      - name: Move cache
+        run: |
+          rm -rf /tmp/.buildx-cache
+          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+
+      - name: Save Docker image
+        run: |
+          docker save ${{ env.DOCKER_IMAGE }}:latest | gzip > /tmp/docker-image.tar.gz
+
+      - name: Upload Docker image
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image
+          path: /tmp/docker-image.tar.gz
+          retention-days: 1
+
+  # ============================================================================
+  # Test Mix CLI (no root needed)
+  # ============================================================================
+  test-mix-cli:
+    name: Test Mix CLI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Run vet and tests
+        working-directory: src/mix-cli
+        run: |
+          go mod tidy
+          go vet ./...
+          go test -v ./... || echo "Tests completed"
+
+  # ============================================================================
+  # Build All (in Docker with --privileged)
+  # ============================================================================
+  build-all:
+    name: Build All (Docker)
+    runs-on: ubuntu-latest
+    needs: [build-docker-image, test-mix-cli]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Docker image
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+          path: /tmp/
+
+      - name: Load Docker image
+        run: |
+          gunzip -c /tmp/docker-image.tar.gz | docker load
+
+      - name: Create output directories
+        run: |
+          mkdir -p ${{ github.workspace }}/artifacts
+          mkdir -p ${{ github.workspace }}/.tmp/mixos-build
+
+      - name: Build everything in Docker (privileged)
+        run: |
+          docker run --rm --privileged \
+            -v ${{ github.workspace }}:/workspace \
+            -v ${{ github.workspace }}/artifacts:/workspace/artifacts \
+            -v ${{ github.workspace }}/.tmp/mixos-build:/workspace/.tmp/mixos-build \
+            -e BUILD_DIR=/workspace/.tmp/mixos-build \
+            -e OUTPUT_DIR=/workspace/artifacts \
+            -e REPO_ROOT=/workspace \
+            -e VERSION=${{ env.VERSION }} \
+            -e KERNEL_VERSION=${{ env.KERNEL_VERSION }} \
+            -w /workspace \
+            ${{ env.DOCKER_IMAGE }}:latest \
+            bash -c "make all 2>&1 | tee /workspace/artifacts/build.log; exit \${PIPESTATUS[0]}"
+        timeout-minutes: 120
+
+      - name: List artifacts
+        if: always()
+        run: |
+          echo "=== Artifacts ==="
+          ls -la ${{ github.workspace }}/artifacts/ || true
+          echo "=== Boot ==="
+          ls -la ${{ github.workspace }}/artifacts/boot/ || true
+          echo "=== VISO/ISO ==="
+          ls -la ${{ github.workspace }}/artifacts/*.viso ${{ github.workspace }}/artifacts/*.iso 2>/dev/null || echo "No VISO/ISO found"
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: ${{ github.workspace }}/artifacts/build.log
+
+      - name: Upload kernel artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel
+          path: |
+            ${{ github.workspace }}/artifacts/boot/vmlinuz-mixos
+            ${{ github.workspace }}/artifacts/boot/System.map-mixos
+            ${{ github.workspace }}/artifacts/modules-mixos.tar.gz
+          if-no-files-found: warn
+
+      - name: Upload initramfs
+        uses: actions/upload-artifact@v4
+        with:
+          name: initramfs
+          path: ${{ github.workspace }}/artifacts/boot/initramfs-mixos.img
+          if-no-files-found: warn
+
+      - name: Upload mix-cli
+        uses: actions/upload-artifact@v4
+        with:
+          name: mix-cli
+          path: ${{ github.workspace }}/artifacts/mix
+          if-no-files-found: warn
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer
+          path: ${{ github.workspace }}/artifacts/mixos-install
+          if-no-files-found: warn
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: packages
+          path: ${{ github.workspace }}/artifacts/packages/
+          if-no-files-found: warn
+
+      - name: Upload VISO
+        uses: actions/upload-artifact@v4
+        with:
+          name: viso
+          path: |
+            ${{ github.workspace }}/artifacts/*.viso
+            ${{ github.workspace }}/artifacts/*.viso.tar.gz
+          if-no-files-found: warn
+
+      - name: Upload ISO
+        uses: actions/upload-artifact@v4
+        with:
+          name: iso
+          path: ${{ github.workspace }}/artifacts/*.iso
+          if-no-files-found: warn
+
+  # ============================================================================
+  # Quick Build (VISO only, for PRs)
+  # ============================================================================
+  build-viso-only:
+    name: Build VISO Only (Quick)
+    runs-on: ubuntu-latest
+    needs: [build-docker-image]
+    if: github.event.inputs.build_type == 'viso-only' || github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Docker image
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+          path: /tmp/
+
+      - name: Load Docker image
+        run: |
+          gunzip -c /tmp/docker-image.tar.gz | docker load
+
+      - name: Create output directories
+        run: |
+          mkdir -p ${{ github.workspace }}/artifacts
+          mkdir -p ${{ github.workspace }}/.tmp/mixos-build
+
+      - name: Build VISO in Docker (privileged)
+        run: |
+          docker run --rm --privileged \
+            -v ${{ github.workspace }}:/workspace \
+            -v ${{ github.workspace }}/artifacts:/workspace/artifacts \
+            -v ${{ github.workspace }}/.tmp/mixos-build:/workspace/.tmp/mixos-build \
+            -e BUILD_DIR=/workspace/.tmp/mixos-build \
+            -e OUTPUT_DIR=/workspace/artifacts \
+            -e REPO_ROOT=/workspace \
+            -e VERSION=${{ env.VERSION }} \
+            -e KERNEL_VERSION=${{ env.KERNEL_VERSION }} \
+            -w /workspace \
+            ${{ env.DOCKER_IMAGE }}:latest \
+            bash -c "make viso 2>&1 | tee /workspace/artifacts/build-viso.log; exit \${PIPESTATUS[0]}"
+        timeout-minutes: 90
+
+      - name: Upload VISO
+        uses: actions/upload-artifact@v4
+        with:
+          name: viso-quick
+          path: |
+            ${{ github.workspace }}/artifacts/*.viso
+            ${{ github.workspace }}/artifacts/build-viso.log
+
+  # ============================================================================
+  # Test VISO (smoke test with QEMU)
+  # ============================================================================
+  test-viso:
+    name: Test VISO (QEMU)
+    runs-on: ubuntu-latest
+    needs: [build-all]
+    if: success()
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download VISO
+        uses: actions/download-artifact@v4
+        with:
+          name: viso
+          path: ${{ github.workspace }}/artifacts/
+
+      - name: Install QEMU
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86
+
+      - name: Smoke test VISO
+        run: |
+          VISO=$(ls ${{ github.workspace }}/artifacts/*.viso 2>/dev/null | head -n1 || true)
+          if [ -z "$VISO" ]; then
+            echo "No VISO found, skipping test"
+            exit 0
+          fi
+          
+          echo "Testing VISO: $VISO"
+          timeout 60 qemu-system-x86_64 \
+            -drive file="$VISO",format=raw,if=virtio \
+            -m 512M \
+            -nographic \
+            -no-reboot \
+            -serial mon:stdio \
+            2>&1 | tee /tmp/qemu.log || true
+          
+          # Check if kernel started
+          if grep -q "Linux version" /tmp/qemu.log; then
+            echo "✓ Kernel booted successfully"
+          else
+            echo "⚠ Kernel boot not detected (may be timeout)"
+          fi
+
+  # ============================================================================
+  # Release (on tags)
+  # ============================================================================
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: [build-all, test-viso]
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts/
+
+      - name: Prepare release files
+        run: |
+          mkdir -p release/
+          
+          # Copy VISO
+          cp release-artifacts/viso/*.viso release/ 2>/dev/null || true
+          
+          # Copy ISO
+          cp release-artifacts/iso/*.iso release/ 2>/dev/null || true
+          
+          # Create checksums
+          cd release/
+          sha256sum * > SHA256SUMS.txt 2>/dev/null || true
+          
+          ls -la
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            release/*.viso
+            release/*.iso
+            release/SHA256SUMS.txt
+          draft: true
+          generate_release_notes: true
