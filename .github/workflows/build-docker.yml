@@ -2,7 +2,7 @@ name: MixOS-GO Build (Docker)
 
 on:
   push:
-    branches: [ main, develop, 'bug(kernel)' ]
+    branches: [ main, develop, 'rebuilding(scripts)' ]
     tags: [ 'v*' ]
   pull_request:
     branches: [ main ]
@@ -23,6 +23,9 @@ env:
   KERNEL_VERSION: '6.6.8'
   VERSION: '1.0.0'
   DOCKER_IMAGE: mixos-builder
+  # Standardized directory structure (matches Makefile)
+  BUILD_DIR: .tmp
+  OUTPUT_DIR: artifacts
 
 jobs:
   # ============================================================================
@@ -128,15 +131,15 @@ jobs:
       - name: Create output directories
         run: |
           mkdir -p ${{ github.workspace }}/artifacts
-          mkdir -p ${{ github.workspace }}/.tmp/mixos-build
+          mkdir -p ${{ github.workspace }}/.tmp
 
       - name: Build everything in Docker (privileged)
         run: |
           docker run --rm --privileged \
             -v ${{ github.workspace }}:/workspace \
             -v ${{ github.workspace }}/artifacts:/workspace/artifacts \
-            -v ${{ github.workspace }}/.tmp/mixos-build:/workspace/.tmp/mixos-build \
-            -e BUILD_DIR=/workspace/.tmp/mixos-build \
+            -v ${{ github.workspace }}/.tmp:/workspace/.tmp \
+            -e BUILD_DIR=/workspace/.tmp \
             -e OUTPUT_DIR=/workspace/artifacts \
             -e REPO_ROOT=/workspace \
             -e VERSION=${{ env.VERSION }} \
@@ -241,15 +244,15 @@ jobs:
       - name: Create output directories
         run: |
           mkdir -p ${{ github.workspace }}/artifacts
-          mkdir -p ${{ github.workspace }}/.tmp/mixos-build
+          mkdir -p ${{ github.workspace }}/.tmp
 
       - name: Build VISO in Docker (privileged)
         run: |
           docker run --rm --privileged \
             -v ${{ github.workspace }}:/workspace \
             -v ${{ github.workspace }}/artifacts:/workspace/artifacts \
-            -v ${{ github.workspace }}/.tmp/mixos-build:/workspace/.tmp/mixos-build \
-            -e BUILD_DIR=/workspace/.tmp/mixos-build \
+            -v ${{ github.workspace }}/.tmp:/workspace/.tmp \
+            -e BUILD_DIR=/workspace/.tmp \
             -e OUTPUT_DIR=/workspace/artifacts \
             -e REPO_ROOT=/workspace \
             -e VERSION=${{ env.VERSION }} \

@@ -2,26 +2,60 @@ name: CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, 'rebuilding(scripts)' ]
   pull_request:
     branches: [ main ]
 
 env:
   GO_VERSION: '1.21'
   VERSION: '1.0.0'
-  # Standardized directory structure
-  BUILD_DIR: /tmp/mixos-build
+  # Standardized directory structure (matches Makefile)
+  BUILD_DIR: ${{ github.workspace }}/.tmp
   OUTPUT_DIR: ${{ github.workspace }}/artifacts
+  REPO_ROOT: ${{ github.workspace }}
 
 jobs:
-  build:
+  # ============================================================================
+  # Syntax Check - Validate all scripts
+  # ============================================================================
+  syntax-check:
+    name: Syntax Check
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+
+      - name: Check shell scripts syntax
+        run: |
+          echo "=== Checking build scripts ==="
+          for script in build/scripts/*.sh; do
+            echo "Checking $script..."
+            bash -n "$script" || exit 1
+          done
+          
+          echo "=== Checking init scripts ==="
+          bash -n rootfs/init/init || exit 1
+          
+          echo "=== Checking package scripts ==="
+          for script in packages/*/build.sh; do
+            if [ -f "$script" ]; then
+              echo "Checking $script..."
+              bash -n "$script" || exit 1
+            fi
+          done
+          
+          echo "✓ All scripts passed syntax check"
+
+  # ============================================================================
+  # Test Mix CLI
+  # ============================================================================
+  test-mix-cli:
+    name: Test Mix CLI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
       - name: Setup Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
 
@@ -35,70 +69,115 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-go-
 
-      - name: Install build deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential squashfs-tools xorriso grub-common git qemu-system-x86
-
-      - name: Run Go vet and tests (mix-cli)
+      - name: Run Go vet and tests
         working-directory: src/mix-cli
         run: |
           go mod tidy
           go vet ./...
           go test ./... -v
 
-      - name: Run Go vet and tests (installer)
+  # ============================================================================
+  # Test Installer
+  # ============================================================================
+  test-installer:
+    name: Test Installer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Run Go vet and tests
         working-directory: src/installer
         run: |
           go mod tidy
           go vet ./...
           go test ./... -v
 
-      - name: Build binaries
+  # ============================================================================
+  # Build Binaries
+  # ============================================================================
+  build-binaries:
+    name: Build Binaries
+    runs-on: ubuntu-latest
+    needs: [syntax-check, test-mix-cli, test-installer]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Build mix-cli
+        working-directory: src/mix-cli
         run: |
-          mkdir -p ${{ env.OUTPUT_DIR }}/boot ${{ env.OUTPUT_DIR }}/packages
-          
-          # Build mix-cli
-          cd src/mix-cli
-          go build -ldflags='-s -w' -o ${{ env.OUTPUT_DIR }}/mix .
+          mkdir -p ${{ env.OUTPUT_DIR }}
+          go mod tidy
+          CGO_ENABLED=1 go build -ldflags="-s -w -X main.Version=${{ env.VERSION }}" -o ${{ env.OUTPUT_DIR }}/mix .
           chmod +x ${{ env.OUTPUT_DIR }}/mix
-          
-          # Build installer (static, no cgo)
-          cd ../installer
+
+      - name: Build installer
+        working-directory: src/installer
+        run: |
+          go mod tidy
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags='-s -w' -o ${{ env.OUTPUT_DIR }}/mixos-install .
           chmod +x ${{ env.OUTPUT_DIR }}/mixos-install
-          
-          echo "=== Built binaries ==="
-          ls -lah ${{ env.OUTPUT_DIR }}/
 
       - name: Smoke check binaries
         run: |
-          if [ -f ${{ env.OUTPUT_DIR }}/mixos-install ]; then
-            ${{ env.OUTPUT_DIR }}/mixos-install --version
-          else
-            echo "Installer binary not found"; exit 1
-          fi
-          if [ -f ${{ env.OUTPUT_DIR }}/mix ]; then
-            ${{ env.OUTPUT_DIR }}/mix --help >/dev/null || echo 'mix help check'
-          fi
+          echo "=== mix-cli ==="
+          ${{ env.OUTPUT_DIR }}/mix --help || echo "mix help check"
+          
+          echo "=== installer ==="
+          ${{ env.OUTPUT_DIR }}/mixos-install --version
 
       - name: Autoinstall dry-run
         run: |
-          if [ -f ${{ env.OUTPUT_DIR }}/mixos-install ]; then
-            ${{ env.OUTPUT_DIR }}/mixos-install --config packaging/install.yaml --dry-run
-          else
-            echo "Installer binary not found"; exit 1
-          fi
+          ${{ env.OUTPUT_DIR }}/mixos-install --config packaging/install.yaml --dry-run
 
-      - name: Build packages (optional)
-        run: |
-          export BUILD_DIR=${{ env.BUILD_DIR }}
-          export OUTPUT_DIR=${{ env.OUTPUT_DIR }}
-          export REPO_ROOT=${{ github.workspace }}
-          make packages || true
-
-      - name: Archive artifacts
+      - name: Upload binaries
         uses: actions/upload-artifact@v4
         with:
-          name: mixos-artifacts
-          path: ${{ env.OUTPUT_DIR }}/
+          name: binaries
+          path: |
+            ${{ env.OUTPUT_DIR }}/mix
+            ${{ env.OUTPUT_DIR }}/mixos-install
+
+  # ============================================================================
+  # Build Packages
+  # ============================================================================
+  build-packages:
+    name: Build Packages
+    runs-on: ubuntu-latest
+    needs: [build-binaries]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build packages
+        run: |
+          mkdir -p ${{ env.OUTPUT_DIR }}/packages
+          mkdir -p ${{ env.BUILD_DIR }}
+          
+          # Try new location first (packages/), then old (src/packages/)
+          for pkg in packages/*/build.sh src/packages/*/build.sh; do
+            if [ -f "$pkg" ]; then
+              echo "Building $(basename $(dirname $pkg))..."
+              bash "$pkg" || true
+            fi
+          done
+
+      - name: List packages
+        run: |
+          echo "Built packages:"
+          ls -lah ${{ env.OUTPUT_DIR }}/packages/ 2>/dev/null || echo "No packages built"
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: packages
+          path: ${{ env.OUTPUT_DIR }}/packages/
+          if-no-files-found: warn
