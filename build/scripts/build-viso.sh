@@ -9,33 +9,28 @@
 #   - Optimized untuk virtio (paravirtualization)
 #   - Support VRAM mode (load ke RAM)
 #   - Support SDISK parameter
+#
+# IMPORTANT: VISO is a CONTAINER, not the OS itself!
+# The actual OS is in rootfs.squashfs inside the VISO.
 # ============================================================================
 
 set -e
 
-# Directory structure
-BUILD_DIR="${BUILD_DIR:-$(pwd)/.tmp/mixos-build}"
-OUTPUT_DIR="${OUTPUT_DIR:-$(pwd)/artifacts}"
-REPO_ROOT="${REPO_ROOT:-$(pwd)}"
-VERSION="${VERSION:-1.0.0}"
+# Source common functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$SCRIPT_DIR/common.sh" ]; then
+    source "$SCRIPT_DIR/common.sh"
+else
+    echo "ERROR: common.sh not found"
+    exit 1
+fi
 
 # VISO Configuration
 VISO_NAME="mixos-go-v${VERSION}"
 VISO_SIZE_MB="${VISO_SIZE_MB:-2048}"  # 2GB default
 
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-NC='\033[0m'
-
-log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
-log_ok() { echo -e "${GREEN}[OK]${NC} $1"; }
-log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
-log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
-log_step() { echo -e "${CYAN}[STEP]${NC} $1"; }
+# Kernel build directory
+KERNEL_BUILD="${BUILD_DIR}/kernel"
 
 # Cleanup function
 cleanup() {
@@ -54,12 +49,7 @@ cleanup() {
 
 trap cleanup EXIT
 
-echo ""
-echo "╔══════════════════════════════════════════════════════════════╗"
-echo "║     MixOS-GO VISO Builder v2.0                               ║"
-echo "║     Bootable Virtual ISO - Better than ISO!                  ║"
-echo "╚══════════════════════════════════════════════════════════════╝"
-echo ""
+log_header "MixOS-GO VISO Builder v2.0"
 
 log_info "Version: $VERSION"
 log_info "VISO Name: $VISO_NAME"
@@ -69,7 +59,8 @@ log_info "Output Dir: $OUTPUT_DIR"
 echo ""
 
 # Create directories
-mkdir -p "$BUILD_DIR" "$OUTPUT_DIR"
+ensure_dir "$BUILD_DIR"
+ensure_dir "$OUTPUT_DIR"
 
 # ============================================================================
 # Step 1: Verify prerequisites

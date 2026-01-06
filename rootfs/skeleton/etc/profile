@@ -1,0 +1,17 @@
+# MixOS-GO System Profile
+
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export HOME="${HOME:-/root}"
+export TERM="${TERM:-linux}"
+export PS1='\u@\h:\w\$ '
+
+# Load profile.d scripts
+if [ -d /etc/profile.d ]; then
+    for script in /etc/profile.d/*.sh; do
+        [ -r "$script" ] && . "$script"
+    done
+    unset script
+fi
+
+# MixOS specific
+export MIXOS_VERSION="1.0.0"

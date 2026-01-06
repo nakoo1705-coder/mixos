@@ -2,51 +2,54 @@
 # ============================================================================
 # MixOS-GO Enhanced Initramfs Builder
 # Builds professional initramfs with VISO/SDISK/VRAM support
+# 
+# Initramfs is the early boot environment that:
+# 1. Loads kernel modules
+# 2. Detects boot media (ISO, VISO, SDISK)
+# 3. Mounts rootfs (squashfs)
+# 4. Switches to real root
 # ============================================================================
 
 set -e
 
-# Standardized directory structure
-# BUILD_DIR: temporary build files
-# BUILD_DIR/rootfs: the rootfs being built (contains lib/modules)
-# OUTPUT_DIR: final artifacts
-# OUTPUT_DIR/boot: kernel and initramfs output
-# OUTPUT_DIR/modules-mixos.tar.gz: kernel modules archive
-BUILD_DIR="${BUILD_DIR:-$(pwd)/.tmp/mixos-build}"
-OUTPUT_DIR="${OUTPUT_DIR:-$(pwd)/artifacts}"
-REPO_ROOT="${REPO_ROOT:-$(pwd)}"
-INITRAMFS_SRC="$REPO_ROOT/initramfs"
+# Source common functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$SCRIPT_DIR/common.sh" ]; then
+    source "$SCRIPT_DIR/common.sh"
+else
+    echo "ERROR: common.sh not found"
+    exit 1
+fi
+
+# Initramfs configuration
 INITRAMFS_BUILD="$BUILD_DIR/initramfs-build"
-KERNEL_VERSION="${KERNEL_VERSION:-6.6.8-mixos}"
 BUSYBOX_VERSION="${BUSYBOX_VERSION:-1.36.1}"
 
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
+# Init script location - try new location first, then old
+if [ -f "${REPO_ROOT}/rootfs/init/init" ]; then
+    INIT_SCRIPT="${REPO_ROOT}/rootfs/init/init"
+elif [ -f "${REPO_ROOT}/initramfs/init" ]; then
+    INIT_SCRIPT="${REPO_ROOT}/initramfs/init"
+else
+    die "Init script not found!"
+fi
 
-log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
-log_ok() { echo -e "${GREEN}[OK]${NC} $1"; }
-log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
-log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+# Kernel modules location
+KERNEL_BUILD="${BUILD_DIR}/kernel"
+MODULES_DIR="${KERNEL_BUILD}/modules"
 
-echo ""
-echo "╔══════════════════════════════════════════════════════════════╗"
-echo "║     MixOS-GO Enhanced Initramfs Builder                      ║"
-echo "║     VISO/SDISK/VRAM Support                                  ║"
-echo "╚══════════════════════════════════════════════════════════════╝"
-echo ""
+log_header "MixOS-GO Enhanced Initramfs Builder"
 
 log_info "Build Directory: $BUILD_DIR"
 log_info "Output Directory: $OUTPUT_DIR"
-log_info "Initramfs Source: $INITRAMFS_SRC"
+log_info "Init Script: $INIT_SCRIPT"
 log_info "Kernel Version: $KERNEL_VERSION"
+log_info "Modules Directory: $MODULES_DIR"
 echo ""
 
 # Create directories
-mkdir -p "$BUILD_DIR" "$OUTPUT_DIR" "$OUTPUT_DIR/boot"
+ensure_dir "$BUILD_DIR"
+ensure_dir "$OUTPUT_DIR/boot"
 
 # Clean previous build
 rm -rf "$INITRAMFS_BUILD"
@@ -151,38 +154,74 @@ log_ok "BusyBox installed"
 # ============================================================================
 # Step 3: Copy init scripts
 # ============================================================================
-log_info "Installing init scripts..."
+log_step "Installing init scripts..."
 
-# Copy main init script
-if [ -f "$INITRAMFS_SRC/init" ]; then
-    cp "$INITRAMFS_SRC/init" "$INITRAMFS_BUILD/init"
+# Copy main init script (use INIT_SCRIPT variable set at top)
+if [ -f "$INIT_SCRIPT" ]; then
+    cp "$INIT_SCRIPT" "$INITRAMFS_BUILD/init"
     chmod +x "$INITRAMFS_BUILD/init"
-    log_ok "Main init script installed"
+    log_ok "Main init script installed from $INIT_SCRIPT"
 else
-    log_error "Init script not found: $INITRAMFS_SRC/init"
-    exit 1
+    die "Init script not found: $INIT_SCRIPT"
 fi
 
-# Copy helper scripts
-if [ -d "$INITRAMFS_SRC/scripts" ]; then
-    cp -r "$INITRAMFS_SRC/scripts"/* "$INITRAMFS_BUILD/scripts/"
+# Copy helper scripts from new location first, then old
+HELPER_SCRIPTS_DIR=""
+if [ -d "${REPO_ROOT}/rootfs/init/scripts" ]; then
+    HELPER_SCRIPTS_DIR="${REPO_ROOT}/rootfs/init/scripts"
+elif [ -d "${REPO_ROOT}/initramfs/scripts" ]; then
+    HELPER_SCRIPTS_DIR="${REPO_ROOT}/initramfs/scripts"
+fi
+
+if [ -n "$HELPER_SCRIPTS_DIR" ] && [ -d "$HELPER_SCRIPTS_DIR" ]; then
+    cp -r "$HELPER_SCRIPTS_DIR"/* "$INITRAMFS_BUILD/scripts/" 2>/dev/null || true
     chmod +x "$INITRAMFS_BUILD/scripts"/*.sh 2>/dev/null || true
-    log_ok "Helper scripts installed"
+    log_ok "Helper scripts installed from $HELPER_SCRIPTS_DIR"
 fi
 
 # ============================================================================
 # Step 4: Copy kernel modules
 # ============================================================================
-log_info "Installing kernel modules..."
+log_step "Installing kernel modules..."
 
-# Modules can be in multiple locations:
-# 1. BUILD_DIR/rootfs/lib/modules/$KERNEL_VERSION (if rootfs was built with modules)
-# 2. OUTPUT_DIR/modules-mixos.tar.gz (kernel modules archive)
-# We'll try both approaches
+# Modules can be in multiple locations (in order of preference):
+# 1. KERNEL_BUILD/modules/lib/modules/$KERNEL_VERSION (from build-kernel.sh)
+# 2. BUILD_DIR/rootfs/lib/modules/$KERNEL_VERSION (if rootfs was built with modules)
+# 3. OUTPUT_DIR/modules-mixos.tar.gz (kernel modules archive)
 
-MODULES_SRC="$BUILD_DIR/rootfs/lib/modules/$KERNEL_VERSION"
 MODULES_DST="$INITRAMFS_BUILD/lib/modules/$KERNEL_VERSION"
-MODULES_TARBALL="$OUTPUT_DIR/modules-mixos.tar.gz"
+
+# Try to find modules source
+MODULES_SRC=""
+if [ -d "$MODULES_DIR/lib/modules" ]; then
+    # Find the actual kernel version directory
+    for kver_dir in "$MODULES_DIR/lib/modules"/*; do
+        if [ -d "$kver_dir" ]; then
+            MODULES_SRC="$kver_dir"
+            KERNEL_VERSION="$(basename "$kver_dir")"
+            MODULES_DST="$INITRAMFS_BUILD/lib/modules/$KERNEL_VERSION"
+            log_info "Found modules at $MODULES_SRC"
+            break
+        fi
+    done
+fi
+
+if [ -z "$MODULES_SRC" ] && [ -d "$BUILD_DIR/rootfs/lib/modules" ]; then
+    for kver_dir in "$BUILD_DIR/rootfs/lib/modules"/*; do
+        if [ -d "$kver_dir" ]; then
+            MODULES_SRC="$kver_dir"
+            KERNEL_VERSION="$(basename "$kver_dir")"
+            MODULES_DST="$INITRAMFS_BUILD/lib/modules/$KERNEL_VERSION"
+            log_info "Found modules in rootfs at $MODULES_SRC"
+            break
+        fi
+    done
+fi
+
+MODULES_TARBALL="${KERNEL_BUILD}/modules-mixos.tar.gz"
+if [ -z "$MODULES_SRC" ] && [ ! -f "$MODULES_TARBALL" ]; then
+    MODULES_TARBALL="$OUTPUT_DIR/modules-mixos.tar.gz"
+fi
 
 # Essential modules for boot
 ESSENTIAL_MODULES="

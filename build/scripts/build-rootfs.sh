@@ -1,33 +1,63 @@
 #!/bin/bash
+# ============================================================================
 # MixOS-GO Root Filesystem Build Script
 # Creates the base root filesystem with BusyBox and essential files
+# 
+# This is the MOST IMPORTANT build step - rootfs is the actual OS
+# All components (kernel modules, mix-cli, packages, installer) are
+# integrated here.
+# ============================================================================
 
 set -e
 
-# Standardized directory structure
-# BUILD_DIR: temporary build files
-# OUTPUT_DIR: final artifacts
-# OUTPUT_DIR/boot: kernel and initramfs
-# OUTPUT_DIR/packages: built packages
-# OUTPUT_DIR/mix: mix CLI binary
-# OUTPUT_DIR/mixos-install: installer binary
-# OUTPUT_DIR/modules-mixos.tar.gz: kernel modules
-BUILD_DIR="${BUILD_DIR:-$(pwd)/.tmp/mixos-build}"
-OUTPUT_DIR="${OUTPUT_DIR:-$(pwd)/artifacts}"
-REPO_ROOT="${REPO_ROOT:-$(pwd)}"
+# Source common functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$SCRIPT_DIR/common.sh" ]; then
+    source "$SCRIPT_DIR/common.sh"
+else
+    echo "ERROR: common.sh not found"
+    exit 1
+fi
+
+# RootFS configuration
 ROOTFS_DIR="$BUILD_DIR/rootfs"
 BUSYBOX_VERSION="1.36.1"
 BUSYBOX_URL="https://busybox.net/downloads/busybox-${BUSYBOX_VERSION}.tar.bz2"
 
-echo "=== MixOS-GO Root Filesystem Build ==="
-echo "Build Directory: $BUILD_DIR"
-echo "Rootfs Directory: $ROOTFS_DIR"
-echo "Output Directory: $OUTPUT_DIR"
-echo "Repo Root: $REPO_ROOT"
+# Kernel modules location (from build-kernel.sh)
+KERNEL_BUILD="${BUILD_DIR}/kernel"
+MODULES_TARBALL="${KERNEL_BUILD}/modules-mixos.tar.gz"
+
+# Patch directory - try new location first, then old
+if [ -d "${REPO_ROOT}/kernel/patches" ]; then
+    PATCH_DIR="${REPO_ROOT}/kernel/patches"
+elif [ -d "${REPO_ROOT}/build/patches" ]; then
+    PATCH_DIR="${REPO_ROOT}/build/patches"
+else
+    PATCH_DIR=""
+fi
+
+# Skeleton directory - try new location first
+if [ -d "${REPO_ROOT}/rootfs/skeleton" ]; then
+    SKELETON_DIR="${REPO_ROOT}/rootfs/skeleton"
+else
+    SKELETON_DIR=""
+fi
+
+log_header "MixOS-GO Root Filesystem Build"
+
+log_info "Build Directory: $BUILD_DIR"
+log_info "Rootfs Directory: $ROOTFS_DIR"
+log_info "Output Directory: $OUTPUT_DIR"
+log_info "Kernel Modules: $MODULES_TARBALL"
+log_info "Patch Directory: ${PATCH_DIR:-none}"
+log_info "Skeleton Directory: ${SKELETON_DIR:-none}"
 echo ""
 
 # Create directories
-mkdir -p "$BUILD_DIR" "$OUTPUT_DIR/boot" "$OUTPUT_DIR/packages"
+ensure_dir "$BUILD_DIR"
+ensure_dir "$OUTPUT_DIR/boot"
+ensure_dir "$OUTPUT_DIR/packages"
 
 # Clean previous rootfs
 rm -rf "$ROOTFS_DIR"
@@ -58,30 +88,24 @@ if [ ! -d "$BUSYBOX_SRC" ]; then
     tar -xf "$BUSYBOX_TARBALL" -C "$BUILD_DIR"
 fi
 
-# Get the patch directory from repo root
-PATCH_DIR="$REPO_ROOT/build/patches"
-
-echo "Repository root: $REPO_ROOT"
-echo "Patch directory: $PATCH_DIR"
-
 cd "$BUSYBOX_SRC"
 
 # Apply patches (quiet + check before applying to avoid noisy warnings)
-if [ -d "$PATCH_DIR" ]; then
+if [ -n "$PATCH_DIR" ] && [ -d "$PATCH_DIR" ]; then
+    log_step "Applying patches from $PATCH_DIR..."
     for patch in "$PATCH_DIR"/busybox-*.patch; do
         [ -f "$patch" ] || continue
         name="$(basename "$patch")"
-        echo "Applying patch: $name"
+        log_info "Applying patch: $name"
         # prefer git apply --check to detect already-applied patches
         if git -C "$BUSYBOX_SRC" apply --check "$patch" 2>/dev/null; then
-            # apply patch quietly
-            patch -p1 -s < "$patch" || echo "Failed to apply $name"
+            patch -p1 -s < "$patch" || log_warn "Failed to apply $name"
         else
-            echo "Skipping $name (already applied or not applicable)"
+            log_info "Skipping $name (already applied or not applicable)"
         fi
     done
 else
-    echo "No patch directory at $PATCH_DIR, skipping patches"
+    log_info "No patch directory, skipping patches"
 fi
 
 # Configure BusyBox for static build
@@ -387,14 +411,20 @@ else
 fi
 
 # Install kernel modules if available
-# Modules are expected at OUTPUT_DIR/modules-mixos.tar.gz (from build-kernel.sh)
-if [ -f "$OUTPUT_DIR/modules-mixos.tar.gz" ]; then
-    echo "Installing kernel modules from $OUTPUT_DIR/modules-mixos.tar.gz..."
-    tar -xzf "$OUTPUT_DIR/modules-mixos.tar.gz" -C "$ROOTFS_DIR"
-    echo "Kernel modules installed to $ROOTFS_DIR/lib/modules/"
+# Modules are expected at KERNEL_BUILD/modules-mixos.tar.gz (from build-kernel.sh)
+# Also check OUTPUT_DIR for backward compatibility
+log_step "Installing kernel modules..."
+if [ -f "$MODULES_TARBALL" ]; then
+    log_info "Installing kernel modules from $MODULES_TARBALL..."
+    tar -xzf "$MODULES_TARBALL" -C "$ROOTFS_DIR"
+    log_ok "Kernel modules installed to $ROOTFS_DIR/lib/modules/"
     ls -la "$ROOTFS_DIR/lib/modules/" 2>/dev/null || true
+elif [ -f "$OUTPUT_DIR/modules-mixos.tar.gz" ]; then
+    log_warn "Using modules from OUTPUT_DIR (old location)"
+    tar -xzf "$OUTPUT_DIR/modules-mixos.tar.gz" -C "$ROOTFS_DIR"
+    log_ok "Kernel modules installed"
 else
-    echo "Kernel modules not found at $OUTPUT_DIR/modules-mixos.tar.gz, skipping..."
+    log_warn "Kernel modules not found, skipping..."
 fi
 
 # Copy mix CLI if available

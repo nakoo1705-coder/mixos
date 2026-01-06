@@ -1,0 +1,8 @@
+NAME="MixOS-GO"
+VERSION="1.0.0"
+ID=mixos
+ID_LIKE=linux
+VERSION_ID="1.0.0"
+PRETTY_NAME="MixOS-GO 1.0.0"
+HOME_URL="https://github.com/mixos-go"
+BUG_REPORT_URL="https://github.com/mixos-go/issues"

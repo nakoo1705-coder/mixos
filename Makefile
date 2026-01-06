@@ -8,7 +8,7 @@ SHELL := /bin/bash
 
 # Configuration
 VERSION := 1.0.0
-BUILD_DIR := $(CURDIR)/.tmp/mixos-build
+BUILD_DIR := $(CURDIR)/.tmp
 OUTPUT_DIR := $(CURDIR)/artifacts
 KERNEL_VERSION := 6.6.8
 JOBS := $(shell nproc)
@@ -285,17 +285,21 @@ initramfs: rootfs
 	@echo -e "$(GREEN)✓ Initramfs built$(NC)"
 
 # viso depends on rootfs (squashfs), kernel (vmlinuz), and initramfs
-viso: rootfs initramfs sdisk vram
+# NOTE: sdisk and vram are NOT dependencies - they are separate outputs
+viso: rootfs initramfs
 	@echo -e "$(CYAN)Building VISO (Virtual ISO) image...$(NC)"
 	@bash build/scripts/build-viso.sh
 	@echo -e "$(GREEN)✓ VISO generated: $(VISO_NAME).viso$(NC)"
 
+# sdisk is an alias/boot mode for VISO, not a separate build target
+# It depends on viso being built first
 sdisk: viso
-	@echo -e "$(CYAN)Creating SDISK (Selection Disk)...$(NC)"
-	@echo "SDISK is an alias for VISO with SDISK boot parameter"
-	@echo "Use: SDISK=$(VISO_NAME).VISO"
+	@echo -e "$(CYAN)SDISK (Selection Disk) ready$(NC)"
+	@echo "SDISK is a boot mode for VISO"
+	@echo "Boot with: SDISK=$(VISO_NAME).viso"
 	@echo -e "$(GREEN)✓ SDISK ready$(NC)"
 
+# vram is a separate output format (squashfs only, for RAM boot)
 vram: rootfs
 	@echo -e "$(CYAN)Building VRAM-optimized package...$(NC)"
 	@mkdir -p $(OUTPUT_DIR)

@@ -1,0 +1,24 @@
+#!/bin/sh
+# MixOS-GO System Shutdown Script
+
+echo "Stopping MixOS-GO..."
+
+# Stop init scripts in reverse order
+if [ -d /etc/init.d ]; then
+    for script in $(ls -r /etc/init.d/S* 2>/dev/null); do
+        [ -x "$script" ] && "$script" stop
+    done
+fi
+
+# Kill all processes
+killall5 -15
+sleep 2
+killall5 -9
+
+# Unmount filesystems
+umount -a -r 2>/dev/null
+
+# Sync disks
+sync
+
+echo "MixOS-GO stopped"

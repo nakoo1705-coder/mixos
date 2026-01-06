@@ -1,0 +1,51 @@
+#!/bin/sh
+# MixOS-GO System Startup Script
+
+echo "Starting MixOS-GO..."
+
+# Mount essential filesystems
+mount -t proc proc /proc 2>/dev/null
+mount -t sysfs sysfs /sys 2>/dev/null
+mount -t devtmpfs devtmpfs /dev 2>/dev/null
+mkdir -p /dev/pts /dev/shm
+mount -t devpts devpts /dev/pts 2>/dev/null
+mount -t tmpfs tmpfs /dev/shm 2>/dev/null
+mount -t tmpfs tmpfs /tmp 2>/dev/null
+mount -t tmpfs tmpfs /run 2>/dev/null
+
+# Create essential device nodes if not present
+[ -e /dev/null ] || mknod -m 666 /dev/null c 1 3
+[ -e /dev/zero ] || mknod -m 666 /dev/zero c 1 5
+[ -e /dev/random ] || mknod -m 666 /dev/random c 1 8
+[ -e /dev/urandom ] || mknod -m 666 /dev/urandom c 1 9
+[ -e /dev/console ] || mknod -m 600 /dev/console c 5 1
+[ -e /dev/tty ] || mknod -m 666 /dev/tty c 5 0
+
+# Set hostname
+[ -f /etc/hostname ] && hostname -F /etc/hostname
+
+# Load kernel modules
+if [ -d /lib/modules ]; then
+    depmod -a 2>/dev/null
+fi
+
+# Apply sysctl settings
+if [ -d /etc/sysctl.d ]; then
+    for conf in /etc/sysctl.d/*.conf; do
+        [ -f "$conf" ] && sysctl -p "$conf" 2>/dev/null
+    done
+fi
+
+# Start init scripts
+if [ -d /etc/init.d ]; then
+    for script in /etc/init.d/S*; do
+        [ -x "$script" ] && "$script" start
+    done
+fi
+
+# Network setup
+if [ -x /sbin/ifconfig ]; then
+    ifconfig lo 127.0.0.1 up 2>/dev/null
+fi
+
+echo "MixOS-GO started successfully"

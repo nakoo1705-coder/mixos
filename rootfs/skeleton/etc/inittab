@@ -1,0 +1,17 @@
+# MixOS-GO inittab for BusyBox init
+
+# System initialization
+::sysinit:/etc/init.d/rcS
+
+# Start getty on console
+::respawn:/sbin/getty -L console 0 vt100
+tty1::respawn:/sbin/getty 38400 tty1
+tty2::respawn:/sbin/getty 38400 tty2
+tty3::respawn:/sbin/getty 38400 tty3
+
+# Stuff to do when restarting the init process
+::restart:/sbin/init
+
+# Stuff to do before rebooting
+::ctrlaltdel:/sbin/reboot
+::shutdown:/etc/init.d/rcK
