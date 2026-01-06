@@ -1,0 +1,167 @@
+FROM ubuntu:24.04
+
+LABEL maintainer="MixOS-GO Team"
+LABEL description="MixOS-GO Build Toolchain - Complete build environment for make all"
+LABEL version="1.0.0"
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install build dependencies (use --no-install-recommends for slimmer image)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    gcc \
+    g++ \
+    make \
+    bc \
+    bison \
+    flex \
+    libelf-dev \
+    libssl-dev \
+    perl \
+    libncurses-dev \
+    device-tree-compiler \
+    # Go tools
+    golang-go \
+    golang-doc \
+    # VISO/Bootloader tools
+    grub-pc-bin \
+    grub2-common \
+    grub-efi-amd64-bin \
+    xorriso \
+    squashfs-tools \
+    mtools \
+    dosfstools \
+    e2fsprogs \
+    parted \
+    libguestfs-tools \
+    # Filesystem tools
+    nfs-kernel-server \
+    nfs-common \
+    cifs-utils \
+    # Cross-compilation toolchains
+    gcc-aarch64-linux-gnu \
+    gcc-arm-linux-gnueabi \
+    gcc-arm-linux-gnueabihf \
+    gcc-mipsel-linux-gnu \
+    gcc-powerpc-linux-gnu \
+    # Additional libraries for cross-compilation (removed: some cross libc packages)
+    qemu-utils \
+    qemu-system-x86 \
+    qemu-system-arm \
+    qemu-system-mips \
+    qemu-system-ppc \
+    # Python for build scripts
+    python3 \
+    python3-pip \
+    # Syslinux/isolinux for bootloaders
+    syslinux \
+    isolinux \
+    # Compression/tools
+    lzop \
+    pixz \
+    plzip \
+    lrzip \
+    zstd \
+    xz-utils \
+    bzip2 \
+    # Other build dependencies
+    ccache \
+    xutils-dev \
+    autoconf \
+    automake \
+    libtool \
+    pkg-config \
+    cmake \
+    # Networking tools
+    iproute2 \
+    net-tools \
+    # Disk partitioning tools (provided by util-linux)
+    fdisk \
+    # LVM tools
+    lvm2 \
+    # RAID tools
+    mdadm \
+    # Cryptography tools
+    cryptsetup \
+    libcryptsetup12 \
+    # Filesystem utilities
+    btrfs-progs \
+    xfsprogs \
+    jfsutils \
+    f2fs-tools \
+    # exFAT: `exfat-utils` replaced by `exfatprogs` in newer suites (install if needed)
+    ntfs-3g \
+    udftools \
+    # Image mounting / fuse
+    libfuse2 \
+    # XML tools
+    libxml2-utils \
+    # Boot image tools
+    u-boot-tools \
+    # Kernel build tools
+    libncurses5-dev \
+    libncursesw5-dev \
+    libtinfo-dev \
+    kmod \
+    # Network/block tools
+    nbd-client \
+    # General utilities
+    curl \
+    wget \
+    tar \
+    gzip \
+    cpio \
+    git \
+    bash \
+    file \
+    patch \
+    tree \
+    which \
+    libc6-dev \
+    # SQLite for package manager
+    libsqlite3-dev \
+    sqlite3 \
+    # Testing/util
+    util-linux \
+    findutils \
+    grep \
+    sed \
+    mawk \
+    coreutils \
+    swig \
+    dwarves \
+    ca-certificates && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+ENV GOPATH=/go \
+    PATH=/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    GO111MODULE=on \
+    GOPROXY=https://proxy.golang.org,direct \
+    GOVCS=*:all \
+    JOBS=4 \
+    BUILD_DIR=/workspace/.tmp/mixos-build \
+    OUTPUT_DIR=/workspace/artifacts \
+    REPO_ROOT=/workspace
+
+# Create working directories and default build/output paths inside workspace
+RUN mkdir -p /workspace/.tmp/mixos-build /workspace/artifacts /workspace /go/bin && \
+    chown -R root:root /workspace/.tmp/mixos-build /workspace/artifacts
+
+WORKDIR /workspace
+
+# Verify a few key tools at build time
+RUN echo "Verifying toolchain installation..." && \
+    gcc --version && \
+    go version && \
+    grub-install --version || true && \
+    mksquashfs --version || true && \
+    qemu-img --version || true && \
+    echo "\u2713 Toolchain packages installed"
+
+# Setup for make all execution
+ENV CFLAGS="-O2" \
+    LDFLAGS="" \
+    MAKEFLAGS="-j${JOBS}"
+# Use bash for RUN commands and at container runtime
+SHELL ["/bin/bash","-lc"]
+CMD ["/bin/bash"]

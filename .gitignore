@@ -5,6 +5,7 @@
 # Temporary build directories
 /tmp/
 *.tmp
+.build-logs/
 
 # Go
 *.exe
