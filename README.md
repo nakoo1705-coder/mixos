@@ -147,20 +147,58 @@ mix viso boot mixos-go-v1.0.0.viso --vram
 ## Directory Structure
 
 ```
-mixos-go/
+mixos/
 ├── build/
-│   ├── docker/          # Docker toolchain
-│   └── scripts/         # Build scripts
-├── configs/
-│   ├── kernel/          # Kernel configuration
-│   └── security/        # Security hardening
+│   ├── docker/              # Docker toolchain
+│   └── scripts/             # Build scripts
+│       ├── common.sh        # Shared functions and logging
+│       ├── env.sh           # Environment variables
+│       ├── sanity-check.sh  # Build environment validation
+│       ├── build-kernel.sh  # Kernel build script
+│       ├── build-rootfs.sh  # Rootfs build script
+│       ├── build-initramfs.sh # Initramfs build script
+│       └── build-viso.sh    # VISO build script
+├── kernel/
+│   ├── config/              # Kernel configuration (mixos_defconfig)
+│   └── patches/             # Kernel and BusyBox patches
+├── rootfs/
+│   ├── init/                # Initramfs init scripts
+│   │   ├── init             # Main init script (VISO/SDISK/VRAM support)
+│   │   └── functions.sh     # Helper functions
+│   ├── skeleton/            # Base filesystem structure
+│   │   └── etc/             # /etc files (passwd, group, inittab, etc.)
+│   └── overlays/            # Security and customization overlays
+├── packages/                # Package build scripts
+│   ├── base-files/
+│   ├── openssh/
+│   └── iptables/
 ├── src/
-│   ├── mix-cli/         # Package manager source
-│   └── packages/        # Package build recipes
-├── tests/               # Test files
-├── docs/                # Documentation
-├── artifacts/           # Build output
+│   ├── mix-cli/             # Mix package manager source (Go)
+│   └── installer/           # MixOS installer source (Go)
+├── tests/                   # Test files
+├── docs/                    # Documentation
+├── archive/                 # Old files (for reference)
+├── artifacts/               # Build output (generated)
 └── Makefile
+```
+
+### Build Output Structure
+
+```
+.tmp/                        # Temporary build directory
+├── kernel/                  # Kernel build output
+│   ├── bzImage              # Compiled kernel
+│   └── modules/             # Kernel modules
+├── rootfs/                  # Rootfs build output
+└── initramfs-build/         # Initramfs build output
+
+artifacts/                   # Final artifacts
+├── boot/
+│   ├── vmlinuz-mixos        # Kernel image
+│   └── initramfs-mixos.img  # Initramfs image
+├── mixos-go-v1.0.0.iso      # Traditional ISO
+├── mixos-go-v1.0.0.viso     # VISO image (recommended)
+└── packages/                # Built packages
 ```
 
 ## Package Format (.mixpkg)

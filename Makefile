@@ -222,7 +222,8 @@ mix-cli-static: toolchain-check
 packages: mix-cli
 	@echo -e "$(YELLOW)Building packages...$(NC)"
 	@mkdir -p $(OUTPUT_DIR)/packages
-	@for pkg in src/packages/*/build.sh; do \
+	@# Try new location first (packages/), then old (src/packages/)
+	@for pkg in packages/*/build.sh src/packages/*/build.sh; do \
 		if [ -f "$$pkg" ]; then \
 			echo "Building $$(dirname $$pkg | xargs basename)..."; \
 			bash "$$pkg" || true; \
