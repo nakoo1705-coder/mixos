@@ -115,6 +115,29 @@ if [ -z "$INITRAMFS_PATH" ]; then
 fi
 log_ok "Initramfs found: $INITRAMFS_PATH"
 
+# Check System.map (optional but useful for debugging)
+SYSMAP_PATH=""
+for spath in "$OUTPUT_DIR/boot/System.map-mixos" "$OUTPUT_DIR/System.map-mixos"; do
+    if [ -f "$spath" ]; then
+        SYSMAP_PATH="$spath"
+        break
+    fi
+done
+if [ -n "$SYSMAP_PATH" ]; then
+    log_ok "System.map found: $SYSMAP_PATH"
+else
+    log_warn "System.map not found (optional)"
+fi
+
+# Check default-cmdline (optional)
+CMDLINE_PATH=""
+if [ -f "$OUTPUT_DIR/boot/default-cmdline" ]; then
+    CMDLINE_PATH="$OUTPUT_DIR/boot/default-cmdline"
+    log_ok "default-cmdline found: $CMDLINE_PATH"
+else
+    log_warn "default-cmdline not found (optional)"
+fi
+
 # Check required tools
 MISSING_TOOLS=0
 for tool in parted mkfs.ext4 losetup grub-install mksquashfs qemu-img; do
@@ -252,6 +275,16 @@ if [ $USE_GUESTFISH -eq 1 ]; then
     cp "$KERNEL_PATH" "$VISO_STAGING/boot/vmlinuz-mixos"
     cp "$INITRAMFS_PATH" "$VISO_STAGING/boot/initramfs-mixos.img"
     cp "$SQUASHFS_PATH" "$VISO_STAGING/rootfs/rootfs.squashfs"
+    
+    # Copy optional boot files
+    if [ -n "$SYSMAP_PATH" ] && [ -f "$SYSMAP_PATH" ]; then
+        cp "$SYSMAP_PATH" "$VISO_STAGING/boot/System.map-mixos"
+        log_info "Copied System.map to VISO"
+    fi
+    if [ -n "$CMDLINE_PATH" ] && [ -f "$CMDLINE_PATH" ]; then
+        cp "$CMDLINE_PATH" "$VISO_STAGING/boot/default-cmdline"
+        log_info "Copied default-cmdline to VISO"
+    fi
     
     # Create metadata
     cat > "$VISO_STAGING/config/viso.json" << EOF
@@ -475,6 +508,16 @@ else
     # Copy squashfs rootfs
     log_info "Copying rootfs.squashfs..."
     cp "$SQUASHFS_PATH" "$VISO_MOUNT/rootfs/rootfs.squashfs"
+    
+    # Copy optional boot files
+    if [ -n "$SYSMAP_PATH" ] && [ -f "$SYSMAP_PATH" ]; then
+        log_info "Copying System.map..."
+        cp "$SYSMAP_PATH" "$VISO_MOUNT/boot/System.map-mixos"
+    fi
+    if [ -n "$CMDLINE_PATH" ] && [ -f "$CMDLINE_PATH" ]; then
+        log_info "Copying default-cmdline..."
+        cp "$CMDLINE_PATH" "$VISO_MOUNT/boot/default-cmdline"
+    fi
     
     # Create VISO metadata
     log_info "Creating metadata..."

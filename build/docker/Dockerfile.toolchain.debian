@@ -1,4 +1,4 @@
-FROM debian:bookworm-slim
+FROM ubuntu:24.04
 
 LABEL maintainer="MixOS-GO Team"
 LABEL description="MixOS-GO Build Toolchain - Complete build environment for make all"
@@ -19,9 +19,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libssl-dev \
     perl \
     libncurses-dev \
-    golang \
+    device-tree-compiler \
+    # Go tools
+    golang-go \
+    golang-doc \
     # VISO/Bootloader tools
     grub-pc-bin \
+    grub2-common \
     grub-efi-amd64-bin \
     xorriso \
     squashfs-tools \
@@ -29,19 +33,83 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     dosfstools \
     e2fsprogs \
     parted \
-    # Network/block tools
-    nbd-client \
-    # Image tools
+    libguestfs-tools \
+    # Filesystem tools
+    nfs-kernel-server \
+    nfs-common \
+    cifs-utils \
+    # Cross-compilation toolchains
+    gcc-aarch64-linux-gnu \
+    gcc-arm-linux-gnueabi \
+    gcc-arm-linux-gnueabihf \
+    gcc-mipsel-linux-gnu \
+    gcc-powerpc-linux-gnu \
+    # Additional libraries for cross-compilation (removed: some cross libc packages)
     qemu-utils \
     qemu-system-x86 \
+    qemu-system-arm \
+    qemu-system-mips \
+    qemu-system-ppc \
+    # Python for build scripts
+    python3 \
+    python3-pip \
+    # Syslinux/isolinux for bootloaders
+    syslinux \
+    isolinux \
+    # Compression/tools
+    lzop \
+    pixz \
+    plzip \
+    lrzip \
+    zstd \
+    xz-utils \
+    bzip2 \
+    # Other build dependencies
+    ccache \
+    xutils-dev \
+    autoconf \
+    automake \
+    libtool \
+    pkg-config \
+    cmake \
+    # Networking tools
+    iproute2 \
+    net-tools \
+    # Disk partitioning tools (provided by util-linux)
+    fdisk \
+    # LVM tools
+    lvm2 \
+    # RAID tools
+    mdadm \
+    # Cryptography tools
+    cryptsetup \
+    libcryptsetup12 \
+    # Filesystem utilities
+    btrfs-progs \
+    xfsprogs \
+    jfsutils \
+    f2fs-tools \
+    # exFAT: `exfat-utils` replaced by `exfatprogs` in newer suites (install if needed)
+    ntfs-3g \
+    udftools \
+    # Image mounting / fuse
+    libfuse2 \
+    # XML tools
+    libxml2-utils \
+    # Boot image tools
+    u-boot-tools \
+    # Kernel build tools
+    libncurses5-dev \
+    libncursesw5-dev \
+    libtinfo-dev \
+    kmod \
+    # Network/block tools
+    nbd-client \
     # General utilities
     curl \
     wget \
     tar \
     gzip \
-    xz-utils \
-    bzip2 \
-    zstd \
     cpio \
     git \
     bash \
@@ -56,10 +124,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # Testing/util
     util-linux \
     findutils \
-    mlocate \
-    ca-certificates \
-    pkg-config \
-    && rm -rf /var/lib/apt/lists/*
+    grep \
+    sed \
+    mawk \
+    coreutils \
+    swig \
+    dwarves \
+    ca-certificates && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
 ENV GOPATH=/go \
     PATH=/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
