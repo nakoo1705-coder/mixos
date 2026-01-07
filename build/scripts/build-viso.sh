@@ -259,9 +259,10 @@ fi
 
 if [ $USE_GUESTFISH -eq 1 ]; then
     # ========================================================================
-    # GUESTFISH METHOD (works without root)
+    # PURE BASH METHOD - Format ext4 directly, mount with -o loop
+    # (avoids guestfish/supermin issues in Docker)
     # ========================================================================
-    log_step "Step 6-10: Using guestfish to create VISO..."
+    log_step "Step 6-10: Creating VISO with mkfs.ext4 + mount..."
     
     # Prepare files to copy
     VISO_STAGING="$BUILD_DIR/viso-staging"
@@ -349,41 +350,68 @@ EOF
 
     log_ok "Staging files prepared"
     
-    # Use guestfish to create the filesystem
-    log_info "Creating filesystem with guestfish..."
+    # Format raw image with ext4
+    log_info "Formatting raw image with ext4..."
+    mkfs.ext4 -F -L "MIXOS-VISO" "$VISO_RAW" 2>&1 | grep -v "^Setting maximal mount count" || true
+    log_ok "Raw image formatted"
     
-    # Run guestfish interactively to create filesystem and copy files
-    # Using stdin redirection for multiple commands
-    guestfish --rw -a "$VISO_RAW" << 'GFEOF'
-run
-# Format the partition
-mkfs ext4 /dev/sda1
-# Mount it
-mount /dev/sda1 /
-# Create directory structure
-mkdir /boot
-mkdir /boot/grub
-mkdir /rootfs
-mkdir /config
-GFEOF
-    
-    log_ok "Filesystem created"
-    
-    # Now copy files using guestfish copy-in command
-    # We need to run guestfish again for copy operations
+    # Try to copy files - use e2cp (e2tools) for non-privileged access
     log_info "Copying files to VISO..."
     
-    guestfish --rw -a "$VISO_RAW" << GFEOF2
-run
-mount /dev/sda1 /
-copy-in $VISO_STAGING/boot/ /
-copy-in $VISO_STAGING/rootfs/ /
-copy-in $VISO_STAGING/config/ /
-copy-in $VISO_STAGING/README.txt /
-sync
-GFEOF2
-    
-    log_ok "Files copied to VISO"
+    # Create directory structure in ext4 using e2mkdir
+    if command -v e2mkdir >/dev/null 2>&1; then
+        log_info "Using e2tools for non-privileged access..."
+        e2mkdir -d "$VISO_RAW" /boot 2>/dev/null || true
+        e2mkdir -d "$VISO_RAW" /boot/grub 2>/dev/null || true
+        e2mkdir -d "$VISO_RAW" /rootfs 2>/dev/null || true
+        e2mkdir -d "$VISO_RAW" /config 2>/dev/null || true
+        
+        # Copy files using e2cp
+        e2cp -p "$KERNEL_PATH" "$VISO_RAW:/boot/vmlinuz-mixos"
+        e2cp -p "$INITRAMFS_PATH" "$VISO_RAW:/boot/initramfs-mixos.img"
+        e2cp -p "$SQUASHFS_PATH" "$VISO_RAW:/rootfs/rootfs.squashfs"
+        if [ -n "$SYSMAP_PATH" ] && [ -f "$SYSMAP_PATH" ]; then
+            e2cp -p "$SYSMAP_PATH" "$VISO_RAW:/boot/System.map-mixos"
+        fi
+        if [ -n "$CMDLINE_PATH" ] && [ -f "$CMDLINE_PATH" ]; then
+            e2cp -p "$CMDLINE_PATH" "$VISO_RAW:/boot/default-cmdline"
+        fi
+        e2cp -p "$VISO_STAGING/config/viso.json" "$VISO_RAW:/config/viso.json"
+        e2cp -p "$VISO_STAGING/boot/grub/grub.cfg" "$VISO_RAW:/boot/grub/grub.cfg"
+        e2cp -p "$VISO_STAGING/README.txt" "$VISO_RAW:/README.txt"
+        log_ok "Files copied to VISO (e2tools)"
+    else
+        # Fallback to mount -o loop if e2tools not available
+        log_warn "e2tools not available, trying loop mount..."
+        mkdir -p "$VISO_MOUNT"
+        if mount -o loop "$VISO_RAW" "$VISO_MOUNT" 2>/dev/null; then
+            # Create directory structure
+            mkdir -p "$VISO_MOUNT"/{boot/grub,rootfs,config}
+            
+            # Copy files
+            cp "$KERNEL_PATH" "$VISO_MOUNT/boot/vmlinuz-mixos"
+            cp "$INITRAMFS_PATH" "$VISO_MOUNT/boot/initramfs-mixos.img"
+            cp "$SQUASHFS_PATH" "$VISO_MOUNT/rootfs/rootfs.squashfs"
+            if [ -n "$SYSMAP_PATH" ] && [ -f "$SYSMAP_PATH" ]; then
+                cp "$SYSMAP_PATH" "$VISO_MOUNT/boot/System.map-mixos"
+            fi
+            if [ -n "$CMDLINE_PATH" ] && [ -f "$CMDLINE_PATH" ]; then
+                cp "$CMDLINE_PATH" "$VISO_MOUNT/boot/default-cmdline"
+            fi
+            cp "$VISO_STAGING/config/viso.json" "$VISO_MOUNT/config/"
+            cp "$VISO_STAGING/boot/grub/grub.cfg" "$VISO_MOUNT/boot/grub/"
+            cp "$VISO_STAGING/README.txt" "$VISO_MOUNT/"
+            
+            # Sync and unmount
+            sync
+            umount "$VISO_MOUNT"
+            log_ok "Files copied to VISO (loop mount)"
+        else
+            log_error "Cannot copy files to VISO: neither e2tools nor loop mount available"
+            log_info "For Docker: ensure libguestfs and loop support enabled, or use e2tools"
+            exit 1
+        fi
+    fi
     
     # Install GRUB using grub-mkimage
     log_step "Step 9: Installing GRUB bootloader..."
@@ -430,7 +458,7 @@ GFEOF2
     # Cleanup staging directory
     rm -rf "$VISO_STAGING"
     
-    log_step "Step 10: VISO creation complete (guestfish method)"
+    log_step "Step 10: VISO creation complete (pure bash method)"
 
 else
     # ========================================================================

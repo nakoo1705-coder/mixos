@@ -185,10 +185,15 @@ toolchain-check:
 # Kernel
 #=============================================================================
 
-kernel: toolchain-check
+# Kernel target depends on kernel config file (input) and produces vmlinuz artifact (output)
+# This forces rebuild ONLY if config or script changes, not based on intermediate timestamps
+$(OUTPUT_DIR)/boot/vmlinuz-mixos: kernel/config/mixos_defconfig build/scripts/build-kernel.sh build/scripts/common.sh
 	@echo -e "$(YELLOW)Building Linux kernel $(KERNEL_VERSION)...$(NC)"
 	@mkdir -p $(OUTPUT_DIR)
 	@bash build/scripts/build-kernel.sh
+
+# Convenience alias for "make kernel" - depends on actual artifact file
+kernel: $(OUTPUT_DIR)/boot/vmlinuz-mixos
 	@echo -e "$(GREEN)✓ Kernel compiled$(NC)"
 
 kernel-config:
@@ -199,13 +204,21 @@ kernel-config:
 # Mix CLI Package Manager
 #=============================================================================
 
-mix-cli: toolchain-check
+#=============================================================================
+# Mix CLI Package Manager
+#=============================================================================
+
+# mix-cli artifact depends on source files
+$(OUTPUT_DIR)/mix: src/mix-cli/go.mod src/mix-cli/main.go $(wildcard src/mix-cli/**/*.go)
 	@echo -e "$(YELLOW)Building mix package manager...$(NC)"
 	@mkdir -p $(OUTPUT_DIR)
 	cd src/mix-cli && \
 		go mod tidy && \
 		CGO_ENABLED=1 go build -ldflags="-s -w" -o $(OUTPUT_DIR)/mix .
 	@echo -e "$(GREEN)✓ Mix CLI built ($(shell du -h $(OUTPUT_DIR)/mix | cut -f1))$(NC)"
+
+# Convenience target
+mix-cli: $(OUTPUT_DIR)/mix
 
 mix-cli-static: toolchain-check
 	@echo -e "$(YELLOW)Building static mix binary...$(NC)"
@@ -219,7 +232,19 @@ mix-cli-static: toolchain-check
 # Packages
 #=============================================================================
 
-packages: mix-cli
+# Installer binary (needed by rootfs)
+$(OUTPUT_DIR)/mixos-install: src/installer/go.mod src/installer/main.go
+	@echo -e "$(YELLOW)Building mixos installer binary...$(NC)"
+	@mkdir -p $(OUTPUT_DIR)
+	cd src/installer && \
+		go mod tidy && \
+		GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o $(OUTPUT_DIR)/mixos-install .
+	@echo -e "$(GREEN)✓ Installer built ($(shell [ -f $(OUTPUT_DIR)/mixos-install ] && du -h $(OUTPUT_DIR)/mixos-install | cut -f1 || echo 'unknown'))$(NC)"
+
+installer: $(OUTPUT_DIR)/mixos-install
+
+# Packages depend on mix-cli being built first
+packages: $(OUTPUT_DIR)/mix
 	@echo -e "$(YELLOW)Building packages...$(NC)"
 	@mkdir -p $(OUTPUT_DIR)/packages
 	@# Try new location first (packages/), then old (src/packages/)
@@ -232,35 +257,32 @@ packages: mix-cli
 	@echo -e "$(GREEN)✓ Packages built$(NC)"
 	@ls -la $(OUTPUT_DIR)/packages/ 2>/dev/null || true
 
-# Installer binary build (so build-rootfs.sh can copy it into rootfs)
-installer: toolchain-check
-	@echo -e "$(YELLOW)Building mixos installer binary...$(NC)"
-	@mkdir -p $(OUTPUT_DIR)
-	cd src/installer && \
-		go mod tidy && \
-		GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o $(OUTPUT_DIR)/mixos-install .
-	@echo -e "$(GREEN)✓ Installer built ($(shell [ -f $(OUTPUT_DIR)/mixos-install ] && du -h $(OUTPUT_DIR)/mixos-install | cut -f1 || echo 'unknown'))$(NC)"
-
 #=============================================================================
 # Root Filesystem
 #=============================================================================
 
-# rootfs depends on kernel (for modules), installer, mix-cli, and packages
-# All artifacts must be built BEFORE rootfs can integrate them
-rootfs: kernel mix-cli installer packages
+# rootfs depends on actual artifact files from kernel, mix-cli, installer, and packages
+# This ensures rootfs only rebuilds if one of these inputs actually changes
+$(BUILD_DIR)/rootfs.squashfs: $(OUTPUT_DIR)/boot/vmlinuz-mixos $(OUTPUT_DIR)/mix $(OUTPUT_DIR)/mixos-install $(OUTPUT_DIR)/packages build/scripts/build-rootfs.sh
 	@echo -e "$(YELLOW)Building root filesystem...$(NC)"
 	@bash build/scripts/build-rootfs.sh
 	@echo -e "$(GREEN)✓ Rootfs created$(NC)"
+
+# Convenience target
+rootfs: $(BUILD_DIR)/rootfs.squashfs
 
 #=============================================================================
 # ISO Image (Traditional)
 #=============================================================================
 
-# iso depends on rootfs (which includes all artifacts), kernel, and initramfs
-iso: rootfs initramfs
+# iso depends on rootfs artifacts and initramfs
+$(OUTPUT_DIR)/mixos-go-v$(VERSION).iso: $(BUILD_DIR)/rootfs.squashfs $(OUTPUT_DIR)/boot/initramfs-mixos.img build/scripts/build-iso.sh
 	@echo -e "$(YELLOW)Building ISO image...$(NC)"
 	@bash build/scripts/build-iso.sh
 	@echo -e "$(GREEN)✓ ISO generated$(NC)"
+
+# Convenience target
+iso: $(OUTPUT_DIR)/mixos-go-v$(VERSION).iso
 
 # Build an unattended ISO embedding packaging/install.yaml
 iso-autoinstall: toolchain-check
@@ -277,20 +299,28 @@ iso-autoinstall: toolchain-check
 # VISO/SDISK/VRAM (Revolutionary Features)
 #=============================================================================
 
-# initramfs depends on rootfs (which has modules extracted from kernel build)
-# This ensures modules are properly installed before initramfs is built
-initramfs: rootfs
+#=============================================================================
+# VISO/SDISK/VRAM (Revolutionary Features)
+#=============================================================================
+
+# initramfs depends on actual rootfs artifact
+$(OUTPUT_DIR)/boot/initramfs-mixos.img: $(BUILD_DIR)/rootfs.squashfs build/scripts/build-initramfs.sh
 	@echo -e "$(CYAN)Building enhanced initramfs with VISO/VRAM support...$(NC)"
 	@mkdir -p $(OUTPUT_DIR)/boot
 	@bash build/scripts/build-initramfs.sh
 	@echo -e "$(GREEN)✓ Initramfs built$(NC)"
 
-# viso depends on rootfs (squashfs), kernel (vmlinuz), and initramfs
-# NOTE: sdisk and vram are NOT dependencies - they are separate outputs
-viso: rootfs initramfs
+# Convenience target
+initramfs: $(OUTPUT_DIR)/boot/initramfs-mixos.img
+
+# viso depends on rootfs (squashfs), kernel (vmlinuz), and initramfs artifacts
+$(OUTPUT_DIR)/$(VISO_NAME).viso: $(BUILD_DIR)/rootfs.squashfs $(OUTPUT_DIR)/boot/vmlinuz-mixos $(OUTPUT_DIR)/boot/initramfs-mixos.img build/scripts/build-viso.sh
 	@echo -e "$(CYAN)Building VISO (Virtual ISO) image...$(NC)"
 	@bash build/scripts/build-viso.sh
 	@echo -e "$(GREEN)✓ VISO generated: $(VISO_NAME).viso$(NC)"
+
+# Convenience target
+viso: $(OUTPUT_DIR)/$(VISO_NAME).viso
 
 # sdisk is an alias/boot mode for VISO, not a separate build target
 # It depends on viso being built first
@@ -301,7 +331,7 @@ sdisk: viso
 	@echo -e "$(GREEN)✓ SDISK ready$(NC)"
 
 # vram is a separate output format (squashfs only, for RAM boot)
-vram: rootfs
+$(OUTPUT_DIR)/$(VISO_NAME).vram: $(BUILD_DIR)/rootfs.squashfs
 	@echo -e "$(CYAN)Building VRAM-optimized package...$(NC)"
 	@mkdir -p $(OUTPUT_DIR)
 	@if [ -f $(BUILD_DIR)/rootfs.squashfs ]; then \
@@ -313,7 +343,10 @@ vram: rootfs
 		echo -e "$(GREEN)✓ VRAM package created$(NC)"; \
 	fi
 
-modules-dep: rootfs
+vram: $(OUTPUT_DIR)/$(VISO_NAME).vram
+
+# modules-dep depends on rootfs artifacts
+modules-dep: $(BUILD_DIR)/rootfs.squashfs
 	@echo -e "$(YELLOW)Generating kernel module dependencies...$(NC)"
 	@bash build/scripts/gen-modules-dep.sh
 	@echo -e "$(GREEN)✓ Module dependencies generated$(NC)"

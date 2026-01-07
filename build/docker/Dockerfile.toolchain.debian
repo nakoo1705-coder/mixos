@@ -32,6 +32,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     mtools \
     dosfstools \
     e2fsprogs \
+    e2tools \
     parted \
     libguestfs-tools \
     # Filesystem tools
@@ -141,13 +142,80 @@ ENV GOPATH=/go \
     JOBS=4 \
     BUILD_DIR=/workspace/.tmp/mixos-build \
     OUTPUT_DIR=/workspace/artifacts \
-    REPO_ROOT=/workspace
+    REPO_ROOT=/workspace \
+    KERNEL_VERSION=6.6.8 \
+    VERSION=1.0.0
 
 # Create working directories and default build/output paths inside workspace
-RUN mkdir -p /workspace/.tmp/mixos-build /workspace/artifacts /workspace /go/bin && \
-    chown -R root:root /workspace/.tmp/mixos-build /workspace/artifacts
+RUN mkdir -p /workspace/.tmp /workspace/artifacts /workspace /go/bin && \
+    chown -R root:root /workspace/.tmp /workspace/artifacts
 
 WORKDIR /workspace
+
+# Copy all build scripts and setup environment
+COPY build/scripts /build/scripts
+RUN chmod +x /build/scripts/*.sh
+
+# Setup bash profile and bashrc to source common.sh and env.sh
+# This ensures all build scripts have access to functions and variables
+# for both login (-l) and non-login shells (-c)
+RUN cat > /build/bash-setup.sh << 'EOF'
+# Load MixOS-GO build environment
+if [ -f /build/scripts/common.sh ]; then
+    source /build/scripts/common.sh
+fi
+if [ -f /build/scripts/env.sh ]; then
+    source /build/scripts/env.sh
+fi
+# Fix REPO_ROOT if we're in Docker container
+# When running in Docker, /workspace is mounted as root, so REPO_ROOT detection fails
+# Override it based on file presence if needed
+if [ ! -d "$REPO_ROOT/kernel/config" ] && [ -d /workspace/kernel/config ]; then
+    export REPO_ROOT=/workspace
+    # Re-export derived paths
+    export KERNEL_CONFIG="$REPO_ROOT/kernel/config/mixos_defconfig"
+    export KERNEL_PATCHES="$REPO_ROOT/kernel/patches"
+    export ROOTFS_SKELETON="$REPO_ROOT/rootfs/skeleton"
+    export ROOTFS_OVERLAYS="$REPO_ROOT/rootfs/overlays"
+    export ROOTFS_INIT="$REPO_ROOT/rootfs/init"
+    export SRC_MIX_CLI="$REPO_ROOT/src/mix-cli"
+    export SRC_INSTALLER="$REPO_ROOT/src/installer"
+    export SRC_AGENT="$REPO_ROOT/src/agent"
+    export PACKAGES_DIR="$REPO_ROOT/packages"
+fi
+EOF
+
+# Add to bashrc (non-login interactive)
+RUN cat /build/bash-setup.sh >> /root/.bashrc && \
+    # Add to bash_profile (login shell)
+    cat /build/bash-setup.sh >> /root/.bash_profile && \
+    # Create /etc/profile.d entry for ALL shells
+    cp /build/bash-setup.sh /etc/profile.d/mixos-build.sh && \
+    chmod 644 /etc/profile.d/mixos-build.sh
+
+# Also source in /bin/sh compatible way for POSIX shells
+RUN cat > /etc/profile.d/mixos-build.sh << 'EOF'
+# Load MixOS-GO build environment (POSIX compatible)
+if [ -f /build/scripts/common.sh ]; then
+    . /build/scripts/common.sh
+fi
+if [ -f /build/scripts/env.sh ]; then
+    . /build/scripts/env.sh
+fi
+EOF
+RUN chmod 644 /etc/profile.d/mixos-build.sh
+
+# Also create an entrypoint wrapper that sources these files
+RUN cat > /build/entrypoint.sh << 'EOF'
+#!/bin/bash
+set -e
+# Source build environment
+. /build/scripts/common.sh
+. /build/scripts/env.sh
+# Execute the command
+exec "$@"
+EOF
+RUN chmod +x /build/entrypoint.sh
 
 # Verify a few key tools at build time
 RUN echo "Verifying toolchain installation..." && \
@@ -161,7 +229,10 @@ RUN echo "Verifying toolchain installation..." && \
 # Setup for make all execution
 ENV CFLAGS="-O2" \
     LDFLAGS="" \
-    MAKEFLAGS="-j${JOBS}"
-# Use bash for RUN commands and at container runtime
-SHELL ["/bin/bash","-lc"]
+    MAKEFLAGS="-j${JOBS}" \
+    BASH_ENV="/build/bash-setup.sh"
+
+# Use bash with sourcing of environment
+SHELL ["/bin/bash", "-lc"]
+ENTRYPOINT ["/build/entrypoint.sh"]
 CMD ["/bin/bash"]
