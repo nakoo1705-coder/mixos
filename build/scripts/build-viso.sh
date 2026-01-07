@@ -126,7 +126,13 @@ if [ -f "$OUTPUT_DIR/boot/default-cmdline" ]; then
     CMDLINE_PATH="$OUTPUT_DIR/boot/default-cmdline"
     log_ok "default-cmdline found: $CMDLINE_PATH"
 else
-    log_warn "default-cmdline not found (optional)"
+    # Auto-generate default-cmdline if not present
+    log_warn "default-cmdline not found, will auto-generate"
+    CMDLINE_PATH="$BUILD_DIR/default-cmdline"
+    cat > "$CMDLINE_PATH" << 'CMDLINEEOF'
+console=ttyS0 console=tty0 quiet
+CMDLINEEOF
+    log_ok "Auto-generated default-cmdline: $CMDLINE_PATH"
 fi
 
 # Check required tools
@@ -346,106 +352,85 @@ EOF
     # Use guestfish to create the filesystem
     log_info "Creating filesystem with guestfish..."
     
-    # Create guestfish script
-    GUESTFISH_SCRIPT="$BUILD_DIR/guestfish.sh"
-    cat > "$GUESTFISH_SCRIPT" << GFEOF
-# Format partition
-mkfs ext4 /dev/sda1
-# Mount
-mount /dev/sda1 /
-# Create directories
-mkdir-p /boot/grub
-mkdir-p /rootfs
-mkdir-p /config
-# Copy files
-copy-in $VISO_STAGING/boot /
-copy-in $VISO_STAGING/rootfs /
-copy-in $VISO_STAGING/config /
-copy-in $VISO_STAGING/README.txt /
-# Sync
-sync
-GFEOF
-
-    # Run guestfish
-    guestfish --rw -a "$VISO_RAW" -i < "$GUESTFISH_SCRIPT" 2>&1 || {
-        # If -i fails (no OS), try manual approach
-        log_warn "Auto-inspect failed, trying manual mount..."
-        guestfish --rw -a "$VISO_RAW" <<GFEOF2
+    # Run guestfish interactively to create filesystem and copy files
+    # Using stdin redirection for multiple commands
+    guestfish --rw -a "$VISO_RAW" << 'GFEOF'
 run
+# Format the partition
 mkfs ext4 /dev/sda1
+# Mount it
 mount /dev/sda1 /
-mkdir-p /boot/grub
-mkdir-p /rootfs
-mkdir-p /config
-copy-in $VISO_STAGING/boot /
-copy-in $VISO_STAGING/rootfs /
-copy-in $VISO_STAGING/config /
+# Create directory structure
+mkdir /boot
+mkdir /boot/grub
+mkdir /rootfs
+mkdir /config
+GFEOF
+    
+    log_ok "Filesystem created"
+    
+    # Now copy files using guestfish copy-in command
+    # We need to run guestfish again for copy operations
+    log_info "Copying files to VISO..."
+    
+    guestfish --rw -a "$VISO_RAW" << GFEOF2
+run
+mount /dev/sda1 /
+copy-in $VISO_STAGING/boot/ /
+copy-in $VISO_STAGING/rootfs/ /
+copy-in $VISO_STAGING/config/ /
 copy-in $VISO_STAGING/README.txt /
 sync
 GFEOF2
-    }
     
-    log_ok "Filesystem created with guestfish"
+    log_ok "Files copied to VISO"
     
-    # Install GRUB using grub-install with guestfish
-    log_info "Installing GRUB bootloader..."
+    # Install GRUB using grub-mkimage
+    log_step "Step 9: Installing GRUB bootloader..."
     
-    # For GRUB, we need to use virt-rescue or grub-install with special options
-    # Since we can't easily run grub-install inside guestfish, we'll copy GRUB modules
-    # and create a minimal boot setup
-    
-    # Copy GRUB modules to the image
-    GRUB_MODULES_DIR="/usr/lib/grub/i386-pc"
-    if [ -d "$GRUB_MODULES_DIR" ]; then
-        mkdir -p "$VISO_STAGING/boot/grub/i386-pc"
-        cp "$GRUB_MODULES_DIR"/*.mod "$VISO_STAGING/boot/grub/i386-pc/" 2>/dev/null || true
-        cp "$GRUB_MODULES_DIR"/*.lst "$VISO_STAGING/boot/grub/i386-pc/" 2>/dev/null || true
-        
-        # Copy GRUB modules to image
-        guestfish --rw -a "$VISO_RAW" <<GFEOF3
-run
-mount /dev/sda1 /
-mkdir-p /boot/grub/i386-pc
-copy-in $VISO_STAGING/boot/grub/i386-pc /boot/grub/
-sync
-GFEOF3
-        log_ok "GRUB modules copied"
-    fi
-    
-    # Install GRUB to MBR using grub-install with --directory
-    # This requires the image to be accessible
-    log_info "Installing GRUB to MBR..."
-    
-    # Create a temporary NBD or use grub-mkimage
-    # For simplicity, we'll create a bootable image using grub-mkimage
     GRUB_CORE="$BUILD_DIR/core.img"
     GRUB_BOOT="$BUILD_DIR/boot.img"
     
-    if [ -f "/usr/lib/grub/i386-pc/boot.img" ]; then
-        cp "/usr/lib/grub/i386-pc/boot.img" "$GRUB_BOOT"
-        
-        # Create core.img with necessary modules
-        grub-mkimage \
-            -O i386-pc \
-            -o "$GRUB_CORE" \
-            -p "(hd0,msdos1)/boot/grub" \
-            part_msdos ext2 biosdisk normal linux
-        
-        # Write boot.img to MBR (first 446 bytes)
-        dd if="$GRUB_BOOT" of="$VISO_RAW" bs=446 count=1 conv=notrunc 2>/dev/null
-        
-        # Write core.img after MBR (sector 1 onwards)
-        dd if="$GRUB_CORE" of="$VISO_RAW" bs=512 seek=1 conv=notrunc 2>/dev/null
-        
-        log_ok "GRUB installed to MBR"
+    # Check if GRUB is available
+    if ! command -v grub-mkimage >/dev/null 2>&1; then
+        log_warn "grub-mkimage not found, VISO will not be standalone bootable"
+        log_info "You can still boot with: qemu-system-x86_64 -kernel vmlinuz-mixos -initrd initramfs-mixos.img -drive file=viso.qcow2"
     else
-        log_warn "GRUB boot.img not found, VISO may not be standalone bootable"
-        log_info "Use external kernel boot method instead"
+        # Copy boot.img template
+        if [ -f "/usr/lib/grub/i386-pc/boot.img" ]; then
+            cp "/usr/lib/grub/i386-pc/boot.img" "$GRUB_BOOT"
+            
+            # Create core.img with necessary modules
+            grub-mkimage \
+                -O i386-pc \
+                -o "$GRUB_CORE" \
+                -p "(hd0,msdos1)/boot/grub" \
+                part_msdos ext2 biosdisk normal linux 2>/dev/null || {
+                log_warn "grub-mkimage failed, VISO may not boot standalone"
+            }
+            
+            if [ -f "$GRUB_CORE" ]; then
+                # Write boot.img to MBR (first 446 bytes)
+                dd if="$GRUB_BOOT" of="$VISO_RAW" bs=446 count=1 conv=notrunc 2>/dev/null
+                
+                # Write core.img after MBR (sector 1 onwards)
+                dd if="$GRUB_CORE" of="$VISO_RAW" bs=512 seek=1 conv=notrunc 2>/dev/null
+                
+                log_ok "GRUB installed to MBR"
+            fi
+        else
+            log_warn "GRUB boot.img template not found at /usr/lib/grub/i386-pc/boot.img"
+            log_info "VISO will not be standalone bootable"
+        fi
+        
+        # Cleanup GRUB temp files
+        rm -f "$GRUB_CORE" "$GRUB_BOOT"
     fi
     
-    # Cleanup staging
+    # Cleanup staging directory
     rm -rf "$VISO_STAGING"
-    rm -f "$GUESTFISH_SCRIPT" "$GRUB_CORE" "$GRUB_BOOT"
+    
+    log_step "Step 10: VISO creation complete (guestfish method)"
 
 else
     # ========================================================================
